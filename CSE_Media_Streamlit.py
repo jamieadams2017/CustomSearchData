@@ -18,7 +18,6 @@ SPREADSHEET_ID = st.secrets["SPREADSHEET_ID"]
 SHEET_TABS = [
     "IND_Media",
     "PAK_Media",
-    "IRN_Media",
 ]
 
 # ======================================================
@@ -294,3 +293,4 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
                         """,
                         unsafe_allow_html=True,
                     )
+
