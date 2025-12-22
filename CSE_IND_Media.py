@@ -3,7 +3,7 @@ import json
 import time
 import re
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 
 import gspread
@@ -17,33 +17,32 @@ CSE_API_KEY = os.environ["CSE_API_KEY"]
 SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
 
-# Your two CSEs and destination tabs
 CSE_CONFIGS = [
     {"cse_id": "628862614b5d44b5b", "query": "intitle:Bangladesh", "sheet": "IND_Media"},
     {"cse_id": "c0c3126bab16f48c6", "query": "intitle:Bangladesh", "sheet": "PAK_Media"},
 ]
 
-# Networking
-UA = os.environ.get(
-    "USER_AGENT",
+USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
+
+PAGE_FETCH_LIMIT = 40   # limit HTML fetches per sheet (keeps runs fast)
 HTTP_TIMEOUT = 20
-PAGE_FETCH_LIMIT = 40  # max pages per run to fetch HTML for publish date (keeps runs fast)
 
 
 # =========================
 # GOOGLE SHEETS
 # =========================
 def get_gspread_client():
-    creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+    creds = json.loads(GOOGLE_CREDENTIALS_JSON)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    return gspread.authorize(creds)
+    return gspread.authorize(
+        Credentials.from_service_account_info(creds, scopes=scopes)
+    )
 
 
 def get_or_create_worksheet(sh, title, rows=3000, cols=10):
@@ -54,62 +53,76 @@ def get_or_create_worksheet(sh, title, rows=3000, cols=10):
 
 
 def ensure_headers(ws):
-    # No Query column. Added SourceDomain + PublishedDate.
-    headers = ["RunTime", "Title", "Link", "SourceDomain", "PublishedDate", "Snippet"]
+    headers = [
+        "RunTime",
+        "Title",
+        "Link",
+        "SourceDomain",
+        "PublishedDate",
+        "Snippet",
+    ]
     if ws.row_values(1) != headers:
         ws.clear()
         ws.append_row(headers)
 
 
 def load_existing_links(ws):
-    # Link column is 3
-    links = ws.col_values(3)
+    links = ws.col_values(3)  # Link column
     return set(l.strip() for l in links[1:] if l.strip())
 
 
 # =========================
 # HELPERS
 # =========================
-def source_domain(url: str) -> str:
+def source_domain(url):
     try:
         host = urlparse(url).netloc.lower()
-        if host.startswith("www."):
-            host = host[4:]
-        return host
+        return host[4:] if host.startswith("www.") else host
     except Exception:
         return ""
 
 
-def to_date_yyyy_mm_dd(value: str) -> str:
-    """
-    Best-effort parse of a date/time string to YYYY-MM-DD.
-    Handles ISO-like strings: 2025-12-22T11:56:47Z, 2025-12-22, etc.
-    """
+def to_yyyy_mm_dd(value):
     if not value:
         return ""
-
-    s = value.strip()
-
-    # Quick accept: YYYY-MM-DD
-    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
-    if m:
-        return s
-
-    # Extract a leading YYYY-MM-DD from longer strings
-    m = re.match(r"^(\d{4}-\d{2}-\d{2})", s)
-    if m:
-        return m.group(1)
-
-    # Some sites do: 22 Dec 2025 etc — avoid heavy deps; keep it simple.
-    # If you need broader parsing, tell me and I’ll add python-dateutil parsing.
-    return ""
+    value = value.strip()
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})", value)
+    return m.group(1) if m else ""
 
 
-def extract_jsonld_publish_date(html: str) -> str:
+def extract_relative_time_from_snippet(snippet):
     """
-    Look for JSON-LD blocks and try to find datePublished/dateCreated.
+    Handles: '19 hours ago ...', '3 days ago ...', '45 minutes ago ...'
+    Returns (published_date, cleaned_snippet)
     """
-    # Grab all JSON-LD script contents
+    if not snippet:
+        return "", snippet
+
+    m = re.match(
+        r"^(?P<num>\d+)\s+(?P<unit>minute|minutes|hour|hours|day|days)\s+ago\s*\.\.\.\s*(?P<rest>.*)",
+        snippet.strip(),
+        flags=re.IGNORECASE,
+    )
+
+    if not m:
+        return "", snippet
+
+    num = int(m.group("num"))
+    unit = m.group("unit").lower()
+    rest = m.group("rest").strip()
+
+    if "minute" in unit:
+        delta = timedelta(minutes=num)
+    elif "hour" in unit:
+        delta = timedelta(hours=num)
+    else:
+        delta = timedelta(days=num)
+
+    published = (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%d")
+    return published, rest
+
+
+def extract_jsonld_publish_date(html):
     blocks = re.findall(
         r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
         html,
@@ -117,68 +130,53 @@ def extract_jsonld_publish_date(html: str) -> str:
     )
 
     for b in blocks:
-        b = b.strip()
-        if not b:
-            continue
-        # Some pages have multiple JSON objects/arrays; try to load robustly.
         try:
             data = json.loads(b)
         except Exception:
-            # Sometimes invalid JSON due to trailing commas, etc. Skip.
             continue
 
-        candidates = []
+        dates = []
 
         def walk(obj):
             if isinstance(obj, dict):
                 for k, v in obj.items():
-                    lk = k.lower()
-                    if lk in ("datepublished", "datecreated", "dateissued"):
+                    if k.lower() in ("datepublished", "datecreated", "dateissued"):
                         if isinstance(v, str):
-                            candidates.append(v)
+                            dates.append(v)
                     walk(v)
             elif isinstance(obj, list):
-                for it in obj:
-                    walk(it)
+                for i in obj:
+                    walk(i)
 
         walk(data)
 
-        for c in candidates:
-            d = to_date_yyyy_mm_dd(c)
-            if d:
-                return d
+        for d in dates:
+            parsed = to_yyyy_mm_dd(d)
+            if parsed:
+                return parsed
 
     return ""
 
 
-def extract_meta_publish_date(html: str) -> str:
-    """
-    Try common meta patterns:
-    - property="article:published_time"
-    - name="pubdate" / "publishdate" / "date" / "DC.date.issued" etc
-    """
+def extract_meta_publish_date(html):
     patterns = [
-        r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+name=["\']pubdate["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+name=["\']publishdate["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+name=["\']date["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+name=["\']dc\.date\.issued["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+property=["\']og:updated_time["\'][^>]+content=["\']([^"\']+)["\']',
+        r'article:published_time["\']\s*content=["\']([^"\']+)',
+        r'name=["\']pubdate["\']\s*content=["\']([^"\']+)',
+        r'name=["\']publishdate["\']\s*content=["\']([^"\']+)',
+        r'name=["\']date["\']\s*content=["\']([^"\']+)',
+        r'dc\.date\.issued["\']\s*content=["\']([^"\']+)',
     ]
+
     for p in patterns:
         m = re.search(p, html, flags=re.IGNORECASE)
         if m:
-            d = to_date_yyyy_mm_dd(m.group(1))
-            if d:
-                return d
+            parsed = to_yyyy_mm_dd(m.group(1))
+            if parsed:
+                return parsed
     return ""
 
 
-def fetch_publish_date(url: str, session: requests.Session) -> str:
-    """
-    Fetch HTML and extract publish date via JSON-LD/meta.
-    Returns YYYY-MM-DD or "" if not found.
-    """
+def fetch_publish_date(url, session):
     try:
         r = session.get(url, timeout=HTTP_TIMEOUT, allow_redirects=True)
         if r.status_code >= 400:
@@ -189,11 +187,8 @@ def fetch_publish_date(url: str, session: requests.Session) -> str:
         if d:
             return d
 
-        d = extract_meta_publish_date(html)
-        if d:
-            return d
+        return extract_meta_publish_date(html)
 
-        return ""
     except Exception:
         return ""
 
@@ -212,7 +207,7 @@ def cse_search(query, cse_id, max_results=100):
             "q": query,
             "num": 10,
             "start": start,
-            "dateRestrict": "d1",  # last ~24 hours (CSE approximation)
+            "dateRestrict": "d1",
         }
 
         r = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=30)
@@ -250,9 +245,8 @@ def main():
 
     fetched_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Session for publish-date page fetches
-    sess = requests.Session()
-    sess.headers.update({"User-Agent": UA})
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT})
 
     for cfg in CSE_CONFIGS:
         print(f"Processing → {cfg['sheet']}")
@@ -261,43 +255,49 @@ def main():
         ensure_headers(ws)
         existing_links = load_existing_links(ws)
 
-        results = cse_search(cfg["query"], cfg["cse_id"], max_results=100)
-
-        rows_to_add = []
-        html_fetch_count = 0
+        results = cse_search(cfg["query"], cfg["cse_id"])
+        rows = []
+        fetch_count = 0
 
         for r in results:
-            link = (r.get("link") or "").strip()
+            link = r["link"].strip()
             if not link or link in existing_links:
                 continue
 
             domain = source_domain(link)
 
+            # 1️⃣ Try page-based publish date
             published = ""
-            # Only fetch HTML for a limited number of new links to keep the workflow fast
-            if html_fetch_count < PAGE_FETCH_LIMIT:
-                published = fetch_publish_date(link, sess)
-                html_fetch_count += 1
+            if fetch_count < PAGE_FETCH_LIMIT:
+                published = fetch_publish_date(link, session)
+                fetch_count += 1
 
-            rows_to_add.append([
+            # 2️⃣ Fallback to snippet relative time
+            snippet = r["snippet"]
+            if not published:
+                rel_date, snippet = extract_relative_time_from_snippet(snippet)
+                if rel_date:
+                    published = rel_date
+
+            rows.append([
                 fetched_date,
-                r.get("title", ""),
+                r["title"],
                 link,
                 domain,
                 published,
-                r.get("snippet", ""),
+                snippet,
             ])
+
             existing_links.add(link)
 
-        if rows_to_add:
-            ws.append_rows(rows_to_add, value_input_option="RAW")
-            print(f"  Added {len(rows_to_add)} rows. (publish-date fetches: {html_fetch_count})")
+        if rows:
+            ws.append_rows(rows, value_input_option="RAW")
+            print(f"  Added {len(rows)} rows")
         else:
-            print("  No new rows.")
+            print("  No new rows")
 
     print("Done.")
 
 
 if __name__ == "__main__":
     main()
-
