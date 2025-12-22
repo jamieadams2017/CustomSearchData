@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-import matplotlib.pyplot as plt
 
 # ======================================================
 # PAGE CONFIG
@@ -14,6 +13,8 @@ st.set_page_config(page_title="CSE Media Monitoring", layout="wide")
 # ======================================================
 SPREADSHEET_ID = st.secrets["SPREADSHEET_ID"]
 
+# Put all the sheet tab names you want to show here.
+# If a tab doesn't exist in the spreadsheet, the app will show a warning and skip it.
 SHEET_TABS = [
     "IND_Media",
     "PAK_Media",
@@ -36,15 +37,17 @@ def load_sheet(sheet_name: str) -> pd.DataFrame:
 
     client = gspread.authorize(creds)
     sh = client.open_by_key(SPREADSHEET_ID)
-    ws = sh.worksheet(sheet_name)
+
+    try:
+        ws = sh.worksheet(sheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        # Return empty DF with a marker; caller will handle the warning.
+        return pd.DataFrame({"__missing_sheet__": [sheet_name]})
 
     records = ws.get_all_records()
     df = pd.DataFrame(records)
 
-    if df.empty:
-        return df
-
-    # Ensure columns exist
+    # Ensure expected columns exist (safe defaults)
     for col in ["Title", "Snippet", "Link", "SourceDomain", "PublishedDate", "RunTime"]:
         if col not in df.columns:
             df[col] = ""
@@ -63,7 +66,7 @@ def load_sheet(sheet_name: str) -> pd.DataFrame:
 
 
 # ======================================================
-# STYLES
+# STYLES (NO SIDEBAR, KPI + CARDS)
 # ======================================================
 st.markdown(
     """
@@ -144,17 +147,13 @@ st.title("CSE Media Monitoring")
 with st.container():
     st.markdown('<div class="filter-box">', unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns([1.2, 1.4, 1.4])
+    c1, c2 = st.columns([1.2, 1.8])
 
     with c1:
         date_range = st.date_input("Published date range", [], format="YYYY-MM-DD")
 
     with c2:
         search_text = st.text_input("Search (title/snippet/domain)", "", placeholder="Type keywords...")
-
-    with c3:
-        st.markdown("**Source domain filter**")
-        st.caption("Use the dropdown inside each tab (domains differ).")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -166,6 +165,11 @@ tabs = st.tabs(SHEET_TABS)
 for sheet_name, tab in zip(SHEET_TABS, tabs):
     with tab:
         df = load_sheet(sheet_name)
+
+        # Missing worksheet handling
+        if "__missing_sheet__" in df.columns:
+            st.warning(f'Sheet tab "{sheet_name}" was not found in the spreadsheet. Create it (exact same name) or remove it from SHEET_TABS.')
+            continue
 
         if df.empty:
             st.info("No data available.")
@@ -182,9 +186,11 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
                 options=domain_options,
                 default=[],
                 placeholder="Select one or more domains...",
+                key=f"domains_{sheet_name}",
             )
         with dom_col2:
-            if st.button("Clear domain filter", use_container_width=True, key=f"clear_{sheet_name}"):
+            clear = st.button("Clear", use_container_width=True, key=f"clear_{sheet_name}")
+            if clear:
                 selected_domains = []
 
         filtered = df.copy()
@@ -211,7 +217,7 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
             )
             filtered = filtered[haystack.str.contains(q, na=False)]
 
-        # ✅ Sort only by PublishedDate (descending). Nulls last.
+        # ✅ Sort strictly by PublishedDate (newest first), blanks last
         filtered = filtered.sort_values(
             by=["PublishedDate"],
             ascending=False,
@@ -258,35 +264,14 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
                 file_name=f"{sheet_name}_filtered.csv",
                 mime="text/csv",
                 use_container_width=True,
+                key=f"dl_{sheet_name}",
             )
 
         if filtered.empty:
             st.warning("No results match the selected filters/search.")
             continue
 
-        # ✅ News by domain chart (filtered)
-        st.subheader("News by source domain")
-        domain_counts = (
-            filtered[filtered["SourceDomain"].astype(str).str.len() > 0]
-            .groupby("SourceDomain")
-            .size()
-            .sort_values(ascending=False)
-            .head(15)  # top 15 for readability
-        )
-
-        if domain_counts.empty:
-            st.info("No domain data available for chart.")
-        else:
-            fig = plt.figure()
-            domain_counts.plot(kind="bar")
-            plt.xlabel("Source domain")
-            plt.ylabel("News count")
-            plt.xticks(rotation=45, ha="right")
-            plt.tight_layout()
-            st.pyplot(fig)
-
         # Cards (3 per row)
-        st.subheader("Articles")
         for i in range(0, len(filtered), 3):
             cols = st.columns(3)
             for col, (_, r) in zip(cols, filtered.iloc[i:i+3].iterrows()):
@@ -309,4 +294,3 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
                         """,
                         unsafe_allow_html=True,
                     )
-
