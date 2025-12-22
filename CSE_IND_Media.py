@@ -96,7 +96,7 @@ def main():
     ensure_headers(ws)
     existing_links = load_existing_links(ws)
 
-    now_utc = datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     rows_to_add = []
     for q in QUERIES:
@@ -117,3 +117,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
