@@ -31,4 +31,4 @@ jobs:
           QUERIES: ${{ secrets.QUERIES }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
         run: |
-          CSE_IND_Media.py
+          python CSE_IND_Media.py
