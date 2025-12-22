@@ -2,3 +2,5 @@ requests
 gspread
 google-auth
 python-dateutil
+streamlit
+pandas
