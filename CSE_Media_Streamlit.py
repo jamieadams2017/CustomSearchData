@@ -249,7 +249,7 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
         with k3:
             export_df = filtered.copy()
             export_df["PublishedDate"] = export_df["PublishedDate"].dt.strftime("%Y-%m-%d")
-            export_df["FetchedAtUTC"] = export_df["FetchedAtUTC"].dt.strftime("%Y-%m-%d")
+            export_df["RunTime"] = export_df["RunTime"].dt.strftime("%Y-%m-%d")
 
             csv_bytes = export_df.to_csv(index=False).encode("utf-8")
             st.download_button(
@@ -309,3 +309,4 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
                         """,
                         unsafe_allow_html=True,
                     )
+
