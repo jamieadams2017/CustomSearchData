@@ -19,8 +19,8 @@ GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
 
 # Your two CSEs and destination tabs
 CSE_CONFIGS = [
-    {"cse_id": "628862614b5d44b5b", "query": "Bangladesh", "sheet": "IND_Media"},
-    {"cse_id": "c0c3126bab16f48c6", "query": "Bangladesh", "sheet": "PAK_Media"},
+    {"cse_id": "628862614b5d44b5b", "query": "intitle:Bangladesh", "sheet": "IND_Media"},
+    {"cse_id": "c0c3126bab16f48c6", "query": "intitle:Bangladesh", "sheet": "PAK_Media"},
 ]
 
 # Networking
@@ -300,3 +300,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
