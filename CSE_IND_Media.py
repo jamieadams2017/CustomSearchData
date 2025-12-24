@@ -45,7 +45,7 @@ def get_gspread_client():
     )
 
 
-def get_or_create_worksheet(sh, title, rows=3000, cols=10):
+def get_or_create_worksheet(sh, title, rows=3000, cols=12):
     try:
         return sh.worksheet(title)
     except gspread.WorksheetNotFound:
@@ -53,12 +53,14 @@ def get_or_create_worksheet(sh, title, rows=3000, cols=10):
 
 
 def ensure_headers(ws):
+    # ✅ Added ThumbnailURL
     headers = [
         "RunTime",
         "Title",
         "Link",
         "SourceDomain",
         "PublishedDate",
+        "ThumbnailURL",
         "Snippet",
     ]
     if ws.row_values(1) != headers:
@@ -193,6 +195,37 @@ def fetch_publish_date(url, session):
         return ""
 
 
+def extract_thumbnail(item: dict) -> str:
+    """
+    Best-effort thumbnail extraction from CSE result item:
+    - pagemap.cse_thumbnail[0].src (small)
+    - pagemap.cse_image[0].src (bigger)
+    - pagemap.metatags[0]['og:image'] / ['twitter:image']
+    """
+    pm = item.get("pagemap") or {}
+
+    thumbs = pm.get("cse_thumbnail") or []
+    if isinstance(thumbs, list) and thumbs:
+        src = (thumbs[0] or {}).get("src")
+        if src:
+            return src
+
+    imgs = pm.get("cse_image") or []
+    if isinstance(imgs, list) and imgs:
+        src = (imgs[0] or {}).get("src")
+        if src:
+            return src
+
+    metas = pm.get("metatags") or []
+    if isinstance(metas, list) and metas:
+        meta0 = metas[0] or {}
+        src = meta0.get("og:image") or meta0.get("twitter:image")
+        if src:
+            return src
+
+    return ""
+
+
 # =========================
 # CSE SEARCH
 # =========================
@@ -228,6 +261,7 @@ def cse_search(query, cse_id, max_results=100):
                 "title": it.get("title", ""),
                 "link": it.get("link", ""),
                 "snippet": it.get("snippet", ""),
+                "thumbnail": extract_thumbnail(it),  # ✅ added
             })
 
         start += 10
@@ -243,7 +277,7 @@ def main():
     gc = get_gspread_client()
     sh = gc.open_by_key(SPREADSHEET_ID)
 
-    fetched_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    runtime = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
@@ -280,11 +314,12 @@ def main():
                     published = rel_date
 
             rows.append([
-                fetched_date,
+                runtime,
                 r["title"],
                 link,
                 domain,
                 published,
+                r.get("thumbnail", ""),
                 snippet,
             ])
 
