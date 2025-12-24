@@ -112,30 +112,63 @@ st.markdown(
         justify-content: space-between;
     }
 
-    .thumb-wrap img {
-        border-radius: 10px;
-        width: 100%;
-        height: 150px;
-        object-fit: cover;
-        margin-bottom: 0.75rem;
+    /* --- Horizontal media layout --- */
+    .media-card {
+      display: flex;
+      gap: 14px;
+      align-items: stretch;
     }
 
-    .card-title {
-        font-size: 1rem;
-        font-weight: 650;
-        margin-bottom: 0.5rem;
-        color: #111;
+    .media-thumb {
+      flex: 0 0 160px;
+      width: 160px;
+      height: 120px;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #eef1f4;
     }
 
-    .card-snippet {
-        font-size: 0.9rem;
-        color: #444;
-        margin-bottom: 0.8rem;
+    .media-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
     }
 
-    .card-meta {
-        font-size: 0.82rem;
-        color: #666;
+    .media-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .media-title {
+      font-size: 1rem;
+      font-weight: 650;
+      margin-bottom: 0.35rem;
+      color: #111;
+      line-height: 1.25;
+    }
+
+    .media-snippet {
+      font-size: 0.9rem;
+      color: #444;
+      margin-bottom: 0.6rem;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .media-meta {
+      font-size: 0.82rem;
+      color: #666;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .media-link {
+      font-weight: 600;
+      text-decoration: none;
     }
 
     a { text-decoration: none; font-weight: 600; }
@@ -282,7 +315,7 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
             st.warning("No results match the selected filters/search.")
             continue
 
-        # Cards (3 per row)
+        # Cards (3 per row) — thumbnail left, content right
         for i in range(0, len(filtered), 3):
             cols = st.columns(3)
             for col, (_, r) in zip(cols, filtered.iloc[i:i+3].iterrows()):
@@ -290,22 +323,22 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
                     pub = r["PublishedDate"].date() if pd.notnull(r["PublishedDate"]) else "—"
                     thumb = (r.get("ThumbnailURL", "") or "").strip()
 
-                    # ✅ Thumbnail (if available)
-                    if thumb:
-                        st.markdown(f'<div class="thumb-wrap"><img src="{thumb}" /></div>', unsafe_allow_html=True)
+                    thumb_html = f'<img src="{thumb}" />' if thumb else ""
 
                     st.markdown(
                         f"""
                         <div class="card">
-                            <div>
-                                <div class="card-title">{r['Title']}</div>
-                                <div class="card-snippet">{r['Snippet']}</div>
-                            </div>
-                            <div class="card-meta">
-                                🗓 {pub}
-                                &nbsp;&nbsp;•&nbsp;&nbsp;
-                                🌐 {r['SourceDomain']}<br>
-                                <a href="{r['Link']}" target="_blank">Read article ↗</a>
+                            <div class="media-card">
+                                <div class="media-thumb">{thumb_html}</div>
+                                <div class="media-content">
+                                    <div class="media-title">{r['Title']}</div>
+                                    <div class="media-snippet">{r['Snippet']}</div>
+                                    <div class="media-meta">
+                                        <span>🗓 {pub}</span>
+                                        <span>🌐 {r['SourceDomain']}</span>
+                                        <a class="media-link" href="{r['Link']}" target="_blank">Read article ↗</a>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         """,
