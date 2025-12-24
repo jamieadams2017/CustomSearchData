@@ -47,7 +47,7 @@ def load_sheet(sheet_name: str) -> pd.DataFrame:
     df = pd.DataFrame(records)
 
     # Ensure expected columns exist (safe defaults)
-    for col in ["Title", "Snippet", "Link", "SourceDomain", "PublishedDate", "RunTime"]:
+    for col in ["Title", "Snippet", "Link", "SourceDomain", "PublishedDate", "RunTime", "ThumbnailURL"]:
         if col not in df.columns:
             df[col] = ""
 
@@ -60,6 +60,7 @@ def load_sheet(sheet_name: str) -> pd.DataFrame:
     df["Snippet"] = df["Snippet"].fillna("").astype(str)
     df["Link"] = df["Link"].fillna("").astype(str)
     df["SourceDomain"] = df["SourceDomain"].fillna("").astype(str).str.strip()
+    df["ThumbnailURL"] = df["ThumbnailURL"].fillna("").astype(str).str.strip()
 
     return df
 
@@ -109,6 +110,14 @@ st.markdown(
         display: flex;
         flex-direction: column;
         justify-content: space-between;
+    }
+
+    .thumb-wrap img {
+        border-radius: 10px;
+        width: 100%;
+        height: 150px;
+        object-fit: cover;
+        margin-bottom: 0.75rem;
     }
 
     .card-title {
@@ -167,7 +176,10 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
 
         # Missing worksheet handling
         if "__missing_sheet__" in df.columns:
-            st.warning(f'Sheet tab "{sheet_name}" was not found in the spreadsheet. Create it (exact same name) or remove it from SHEET_TABS.')
+            st.warning(
+                f'Sheet tab "{sheet_name}" was not found in the spreadsheet. '
+                "Create it (exact same name) or remove it from SHEET_TABS."
+            )
             continue
 
         if df.empty:
@@ -276,6 +288,12 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
             for col, (_, r) in zip(cols, filtered.iloc[i:i+3].iterrows()):
                 with col:
                     pub = r["PublishedDate"].date() if pd.notnull(r["PublishedDate"]) else "—"
+                    thumb = (r.get("ThumbnailURL", "") or "").strip()
+
+                    # ✅ Thumbnail (if available)
+                    if thumb:
+                        st.markdown(f'<div class="thumb-wrap"><img src="{thumb}" /></div>', unsafe_allow_html=True)
+
                     st.markdown(
                         f"""
                         <div class="card">
@@ -293,4 +311,3 @@ for sheet_name, tab in zip(SHEET_TABS, tabs):
                         """,
                         unsafe_allow_html=True,
                     )
-
